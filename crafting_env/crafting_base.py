@@ -8,7 +8,6 @@ from six import StringIO, b
 import copy
 from gym import utils
 from gym.envs.toy_text import discrete
-from scipy.misc import imresize
 LEFT = 0
 DOWN = 1
 RIGHT = 2

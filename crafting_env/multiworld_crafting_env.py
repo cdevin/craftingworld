@@ -8,9 +8,8 @@ from six import StringIO, b
 import copy
 from gym import utils
 from gym.envs.toy_text import discrete
-from scipy.misc import imresize
 
-from gridworld.envs.crafting_env.crafting_base import CraftingBase
+from crafting_env.crafting_base import CraftingBase
 
 class CraftingMultiworldEnv(CraftingBase, MultitaskEnv):
     """
