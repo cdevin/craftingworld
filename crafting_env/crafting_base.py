@@ -278,7 +278,7 @@ class CraftingBase():
         if obj.startswith('tree'):
             if self.state[HOLDING].startswith('axe'):
                 pos = self.state['object_positions'][obj]
-                self.__add_obj('sticks', pos)
+                self._add_obj('sticks', pos)
                 self._remove_obj(obj)
             else:
                 blocked = True
