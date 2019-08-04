@@ -19,17 +19,19 @@ class MultiworldCraftingEnv(CraftingBase, MultitaskEnv):
 
     metadata = {'render.modes': ['rgb', 'ansi']}
 
-    def __init__(self, **kwargs ):
+    def __init__(self,append_init_state_to_goal=True, **kwargs ):
         super().__init__(**kwargs)
+        self.append_init_state_to_goal = append_init_state_to_goal
+        goalspace_multipler = 2 if append_init_state_to_goal else 1
         if self.state_obs:
             assert(self.few_obj, "state_obs can only be used with the few_obj mode.")
             self.max_num_per_obj = 3
             self.obs_space = spaces.Box(low=0, high=self.nrow, shape=(self.state_space_size,))
             self.state_space = self.observation_space
-            self.goal_space =  spaces.Box(low=-2, high=2, shape=(self.state_space_size*2,))
+            self.goal_space =  spaces.Box(low=-2, high=2, shape=(self.state_space_size*goalspace_multipler,))
         else:
             self.obs_space = spaces.Box(low=0, high=1., shape=((self.nrow+1)*self.res*self.ncol*self.res*3,))
-            self.goal_space = spaces.Box(low=0, high=1., shape=((self.nrow+1)*self.res*self.ncol*self.res*3*2,))
+            self.goal_space = spaces.Box(low=0, high=1., shape=((self.nrow+1)*self.res*self.ncol*self.res*3*goalspace_multipler,))
             self.achieved_goal_space = self.goal_space
         self.observation_space = Dict([
             ('observation', self.obs_space),
@@ -61,7 +63,10 @@ class MultiworldCraftingEnv(CraftingBase, MultitaskEnv):
 
     def get_obs(self):
         env_obs = self.get_env_obs().flatten()
-        achieved_goal = np.concatenate([self.init_obs.flatten(), env_obs])
+        if self.append_init_state_to_goal:
+            achieved_goal = np.concatenate([self.init_obs.flatten(), env_obs])
+        else:
+            achieved_goal = env_obs
         obs = dict(
             observation=env_obs,
             desired_goal=self.goal,
@@ -93,12 +98,20 @@ class MultiworldCraftingEnv(CraftingBase, MultitaskEnv):
         }
 
     def sample_goals(self, batch_size):
-        goals = np.random.uniform(self.goal_space.low,  self.goal_space.high, size=(batch_size, self.goal_space.low.size), ).astype(np.int).astype(np.float)
-        goals = goals[:, :int(goals.shape[1]/2)]
-        goals = np.concatenate([np.zeros(goals.shape), goals], axis=1)
+        batch_goals = []
+        for i in range(batch_size):
+            batch_goals.append(self.sample_goal)
+        goals = np.concatenate(batch_goals, axis=0)
         return goals
     
     def sample_goal(self):
-        goal = self.sample_goals(1)[0]
+        num_tasks = 10
+        task_id = np.random.randint(low=0, high=num_tasks, size=3)
+        goal_state_dict = self.state
+        for task in task_id:
+            goal_state_dict = self.generate_goal_state(task, goal_state_dict)
+        goal =  self.imagine_obs(goal_state_dict)[np.newaxis, :]
+        if self.append_init_state_to_goal:
+            curr_obs = self.get_env_obs()[np.newaxis, :]
+            goal = np.concatenate([curr_obs, goal_obs], axis=1)
         return goal
-    

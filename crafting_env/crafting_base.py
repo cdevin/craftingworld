@@ -46,11 +46,12 @@ class CraftingBase():
         to end the episode
     success_function=None: A function applied to two states which evaluates whether 
         success was obtained between those states.
-    pretty_renderable=False
-
+    pretty_renderable=False: If True, env will load assets for pretty rendering.
+    fixed_init_state=False: If True, env will always reset to the same state, stored in 
+        self.FIXED_INIT_STATE
     """
     def __init__(self, size=[10,10], res=3, add_objects=[], visible_agent=True, state_obs=False, few_obj=False,
-                 use_exit=False, success_function=None, pretty_renderable=False):
+                 use_exit=False, success_function=None, pretty_renderable=False, fixed_init_state=False):
         self.nrow, self.ncol = size
         self.reward_range = (0, 1)
         self.renderres = 9
@@ -69,9 +70,20 @@ class CraftingBase():
         self.episode = 0
         self.state_obs = state_obs
         self.action_space = spaces.Discrete(self.nA)
+        self.fixed_init_state = fixed_init_state
+        if self.fixed_init_state:
+            self.FIXED_INIT_STATE = {
+                'holding': '', 'hunger': 1.0, 'agent': (7, 8), 'count': 0, 
+                'object_positions': {'wheat_1': (4,6), 'tree_1': (0, 5), 'house_1': (7, 1), 
+                                     'axe_1': (2, 4), 'tree_2': (8, 5), 'bread_1': (2, 0), 
+                                     'rock_2': (6, 2), 'hammer_1': (7, 7), 'sticks_1': (3, 4), 
+                                     'rock_1': (1, 0), 'rock_1': (1, 8)}, 
+                'object_counts': {'axe': 1, 'hammer': 1, 'house': 1, 'tree': 2, 
+                                  'sticks': 1, 'rock': 2, 'bread': 1, 'wheat': 1}}
         if self.state_obs:
             assert(self.few_obj)
             self.max_num_per_obj = 3
+            # the agent pos, objects pos , holding flag, hunger flag
             self.state_space_size = len(OBJECTS)*2*self.max_num_per_obj+2+1+1
             self.observation_space = spaces.Box(low=0, high=self.nS, shape=(self.state_space_size,))
             self.state_space = self.observation_space
@@ -180,7 +192,8 @@ class CraftingBase():
         init_from_state: If a dictionary state is passed here, the environment
         will reset to that state. Otherwise, the state is randomly initialized.
         """
-        
+        if self.fixed_init_state:
+            init_from_state = copy.deepcopy(self.FIXED_INIT_STATE)
         if init_from_state is None:
             self.init_from_state = False
             self.state = {}
@@ -209,8 +222,9 @@ class CraftingBase():
             self.init_from_state = True
             self.state = init_from_state
             self.object_counts = self.state['object_counts']
+            self.state['obj_max_index'] = copy.deepcopy(self.object_counts)
             self.obj_max_index = self.state['obj_max_index']
-            self.objects = self.object_counts.keys()
+            self.objects = [obj for obj in self.object_counts.keys()]
         self.lastaction=None
         total = self.verify_env()
         self.total_count = total
@@ -266,7 +280,6 @@ class CraftingBase():
         self.state['object_positions'][objtype + '_'+str(suffix)] = pos
 
     def _remove_obj(self, obj):
-
         objtype = obj.split('_')[0]
         if objtype not in self.object_counts:
             import pdb; pdb.set_trace()
@@ -543,3 +556,145 @@ class CraftingBase():
             row, col = pos
         return (row, col), blocked, removes_obj
 
+    ################################################################################
+    # Goal generation functions
+    
+    def _add_obj_to_state(self, state, objtype, pos):
+        if objtype not in state['object_counts']:
+            state['object_counts'][objtype] = 0
+        suffix = state['obj_max_index'][objtype] + 1
+        state['obj_max_index'][objtype] += 1
+        state['object_counts'][objtype] += 1
+        state['object_positions'][objtype + '_'+str(suffix)] = pos
+
+    def _remove_obj_from_state(self, state, obj):
+        objtype = obj.split('_')[0]
+        if objtype not in state['object_counts']:
+            import pdb; pdb.set_trace()
+        state['object_counts'][objtype] -= 1
+        del state['object_positions'][obj]
+    
+    def get_objects_by_type(self, name, state):
+        objects = []
+        for obj in state['object_positions'].keys():
+            if obj.startswith(name):
+                objects.append(obj)
+        return objects
+    
+    def get_random_object_by_type(self, name, state = None):
+        if state is None:
+            state = self.state
+        objects = self.get_objects_by_type(name, state)
+        obj = objects[np.random.randint(0, len(objects))]
+        return obj
+    
+    def generate_goal_state(self, task_id, init_state):
+        goal_state = copy.deepcopy(init_state)
+        if task_id == 0: # EatBread
+            if init_state['object_counts']['bread'] > 0:
+                bread = self.get_random_object_by_type('bread', state=goal_state)
+                pos = goal_state['object_positions'][bread]
+                goal_state['hunger'] = 0.0
+                goal_state['agent'] = pos
+                self._remove_obj_from_state(goal_state, bread)
+        elif task_id == 1: # GoToHouse
+            if init_state['object_counts']['house'] > 0:
+                house =self.get_random_object_by_type('house', state=goal_state)
+                pos = goal_state['object_positions'][house]
+                goal_state['agent'] = pos
+        elif task_id == 2: # ChopRock
+            if init_state['object_counts']['rock'] >0 and init_state['object_counts']['hammer'] > 0:
+                rock = self.get_random_object_by_type('rock', state=goal_state)
+                pos = goal_state['object_positions'][rock]
+                self._remove_obj_from_state(goal_state, rock)
+                hammer = self.get_random_object_by_type('hammer')
+                goal_state['agent'] = pos
+                goal_state['object_positions'][hammer] = pos
+                goal_state['holding'] = hammer
+        elif task_id == 3: # ChopTree
+            if init_state['object_counts']['tree'] >0 and init_state['object_counts']['axe'] > 0:
+                tree = self.get_random_object_by_type('tree', state=goal_state)
+                pos = goal_state['object_positions'][tree]
+                self._remove_obj_from_state(goal_state, tree)
+                self._add_obj_to_state(goal_state, 'sticks', pos)
+                axe = self.get_random_object_by_type('axe')
+                goal_state['agent'] = pos
+                goal_state['object_positions'][axe] = pos
+                goal_state['holding'] = axe
+        elif task_id == 4: # BuildHouse
+            if init_state['object_counts']['sticks'] >0 and init_state['object_counts']['hammer'] > 0:
+                sticks = self.get_random_object_by_type('sticks', state=goal_state)
+                pos = goal_state['object_positions'][sticks]
+                self._remove_obj_from_state(goal_state, sticks)
+                self._add_obj_to_state(goal_state, 'house', pos)
+                hammer = self.get_random_object_by_type('hammer')
+                goal_state['agent'] = pos
+                goal_state['object_positions'][hammer] = pos
+                goal_state['holding'] = hammer
+        elif task_id == 5: # MakeBread
+            if init_state['object_counts']['wheat'] >0 and init_state['object_counts']['axe'] > 0:
+                wheat = self.get_random_object_by_type('wheat', state=goal_state)
+                pos = goal_state['object_positions'][wheat]
+                self._remove_obj_from_state(goal_state, wheat)
+                self._add_obj_to_state(goal_state, 'bread', pos)
+                axe = self.get_random_object_by_type('axe')
+                goal_state['agent'] = pos
+                goal_state['object_positions'][axe] = pos
+                goal_state['holding'] = axe
+        elif task_id == 6: # MoveAxe
+            if init_state['object_counts']['axe'] > 0:
+                obj = self.get_random_object_by_type('axe', state=goal_state)
+                newpos = self.from_s(np.random.randint(0, self.nS))
+                goal_state['object_positions'][obj] = newpos
+                goal_state['holding'] = obj
+                goal_state['agent'] = newpos
+        elif task_id == 7: # MoveHammer
+            if init_state['object_counts']['hammer'] > 0:
+                obj = self.get_random_object_by_type('hammer', state=goal_state)
+                newpos = self.from_s(np.random.randint(0, self.nS))
+                goal_state['object_positions'][obj] = newpos
+                goal_state['holding'] = obj
+                goal_state['agent'] = newpos
+        elif task_id == 8: # MoveSticks
+            if init_state['object_counts']['sticks'] > 0:
+                obj = self.get_random_object_by_type('sticks', state=goal_state)
+                newpos = self.from_s(np.random.randint(0, self.nS))
+                goal_state['object_positions'][obj] = newpos
+                goal_state['holding'] = obj
+                goal_state['agent'] = newpos
+        elif task_id == 9: # GoToPosition
+            newpos = self.from_s(np.random.randint(0, self.nS))
+            goal_state['agent'] = newpos    
+        return goal_state
+
+    def get_objects_from_obs(self, obs, obj):
+        poses = []
+        if self.state_obs:
+            for num in range(self.max_num_per_obj):
+                idx = OBJECTS.index(obj)*2*self.max_num_per_obj+2+num*2
+                if obs[idx] >0 or obs[idx+1]>0:
+                    poses.append((obs[idx],obs[idx+1]))
+        else:
+            raise NotImplementedError()
+        return poses
+    
+    def eval_tasks(self, init_obs, final_obs):
+        self.tasks = ['EatBread', 'GoToHouse', 'ChopRock', 'ChopTree', 'BuildHouse', 'MakeBread', 'MoveAxe', 'MoveHammer', "MoveSticks"]
+        task_success = {}
+        if self.state_obs:
+            init_objects = {obj: self.get_objects_from_obs(init_obs, obj) for obj in OBJECTS}
+            final_objects = {obj: self.get_objects_from_obs(final_obs, obj) for obj in OBJECTS}
+            task_success['MakeBread'] = len(final_objects['wheat']) < len(init_objects['wheat'])
+            task_success['EatBread'] = (len(final_objects['bread']) + len(final_objects['wheat'])) < (
+                len(init_objects['bread']) + len(init_objects['wheat']))
+            task_success['BuildHouse'] = len(final_objects['house']) > len(init_objects['house'])
+            task_success['ChopTree'] = len(final_objects['tree']) < len(init_objects['tree'])
+            task_success['ChopRock'] = len(final_objects['rock']) < len(init_objects['rock'])
+            task_success['GoToHouse'] = (final_obs[0], final_obs[1]) in final_objects['house']
+            task_success['MoveAxe'] = final_objects['axe'] != init_objects['axe']
+            task_success['MoveHammer'] = final_objects['hammer'] != init_objects['hammer']
+            task_success['MoveSticks'] = False in [stick in init_objects['sticks'] for stick in final_objects['sticks']]
+            task_list = [task_success[key] for key in self.tasks]
+            return np.array(task_list)
+        else:
+            raise NotImplementedError()
